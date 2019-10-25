@@ -1,0 +1,24 @@
+"List of variables, dependencies, predictors",,,
+variable,description,predictors,Levels
+AGES,Age bands,none none,AGES
+AGE,Single year of age,AGES none,AGE
+AGEDFE,Academic age at school end of year,AGE AGE,AGEDFE
+AGEEUL,Age bands,AGE AGE,AGEEUL
+SEX,Sex,AGES,SEX
+PWT17,weight,AGES SEX,PWT17
+MARSTA,Martital status,AGES SEX,MARSTA
+ETHUKEUL,Ethnic group,AGES SEX,ETHUKEUL
+ILODEFR,Econact,AGES SEX,ILODEFR
+INDS07M,Industry,AGES ILODEFR,INDS07M
+ICDM,Industry,AGES INDS07M,ICDM
+SC10MMJ,Occupation,AGES INDS07M,SC10MMJ
+SOC10M,Occupation,AGES SC10MMJ,SOC10M
+OYSOCC,Occupation,AGES SC10MMJ,OYSOCC
+BANDN,Net pay estimate-band,AGES SC10MMJ,BANDN
+NET99,Net income,AGES BANDN,NET99
+BENFTS,Whether claiming (other) State Benefits,AGES BANDN,BENFTS
+DEGREE71,degrees,AGES SC10MMJ,DEGREE71
+DEGREE72,degrees,AGES DEGREE71,DEGREE71
+DEGREE73,degrees,AGES DEGREE72,DEGREE71
+DEGREE74,degrees,AGES DEGREE73,DEGREE71
+DEGREE75,degrees,AGES DEGREE74,DEGREE71

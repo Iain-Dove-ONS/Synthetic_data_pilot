@@ -1,0 +1,208 @@
+#Synthesis microdata using csv variable list with predictors
+
+#packages
+library(foreign)
+#library(readxl)
+library(dplyr)
+library(synthpop)
+
+
+# path specs
+setwd("P:\\Working\\ivy")
+microdata_file <- "P:\\Working\\Synthpop work\\variable selection\\LFS 17 Q2.csv"
+input_spec_file <- "P:\\Working\\ivy\\input_22.csv"
+output_file <- "P:\\Working\\ivy\\output2.csv"
+
+#####################################################
+
+#read lfs data
+lfs_17 <- read.csv(microdata_file, stringsAsFactors = F)
+
+#csv 'input' file, including predictors (or use read_excel(input_spec_file, skip = 1))
+#Input file contains list of variables to be synthesised, (name in dataset and description) list of predictor variables to be used and 'levels' of variable to be used in final version
+#Optional unused entry 'noise' for adding noise to a chosen numeric variables (e.g. income variables)
+#'levels' is used for sequential variables which should have the same possible entries, e.g. '1st qualification, 2nd qualification, 3rd... 
+#Latter variables only conain a subset of possible values, which are very likely to be reproduced. Instead this method draws values from the specified levels variable (e.g.1st qualification) which contains full list of possible values  
+
+input <- read.csv(input_spec_file, stringsAsFactors = F) %>%  
+    dplyr::select (var, description, predictors, noise, levels)
+rownames(input) <- input$var
+
+#subset data with selected variables for synthesis
+subset1<-lfs_17[,input$var]
+
+#Extra derived inputs, can be added to input dataframe (input <- input %>% cbind(derived_input))
+derived_input <- sapply(subset1[,input$var], function(var) {
+  c(type = class(var),
+    nlevel = n_distinct(var),
+    spread = as.numeric(table(var)[1]),
+    missingness = sum(var %in% c('-9', '-8'))
+)}) %>% t() %>% data.frame(stringsAsFactors=F)
+
+
+
+#Missingness often accounts for large proportion of observations, different types of missingness do not need to be preserved, and records with rare types of missingness can be more likely to be replicated
+#Preserve only whether or not observation is missing by grouping types of missingness before synthesis (and later ungrouping) 
+
+#Replicate missingness only:
+#if levels not == var replace with 1 (keep -9,-8) and create a pool of values for the new levels
+for (var in input$var[input$var != input$levels])
+   subset1[var] <- ifelse(subset1[[var]] %in% c('-8', '-9'), subset1[[var]], '1') 
+
+new_levels <- (unique(input$levels[input$var != input$levels]))
+names(new_levels) <- new_levels
+levels_pool <- lapply( new_levels, 
+  function(var_list){ unlist(lapply(strsplit(var_list, split = ' ')[[1]], 
+    function(var){ lfs_17[!(lfs_17[[var]] %in% c('-9', '-8')), var]}))})
+#sort levels in ages groups
+levels_pool$ages<-sort(unique(lfs_17$AGES))[c(1, 10, 2:9, 11:15)]
+subset1 <- subset1 %>% mutate(AGES = as.numeric(factor (AGES, levels= levels_pool$ages))  )
+
+
+#Create predictor matrix in appropriate format for synthpop from csv input
+pred_full <- matrix(0, nrow = nrow(input), ncol = nrow(input), dimnames = list(input$var, input$var)) 
+#deal with multiple predictors
+for (var in input$var)  pred_full[var, as.vector((strsplit(input[var,'predictors']," "))[[1]])] <- 1  
+
+
+
+#Predict structure/value of NET99 separately
+#NET99 more important to keep whether missing or not (hence employed/ not receiving income) than exact values
+#Convert NET99 to continous variable, so aim to preserve high values of net income vs low rather than relationships with exact values
+
+subset1 <- subset1 %>% mutate(
+  NET99n = as.numeric(NET99),
+  NET99c = ifelse((is.na(NET99n)|NET99n==-9), NET99, 'numeric'))
+#replace coerced NAs with -9
+subset1$NET99n[is.na(subset1$NET99n)]<-rep(-9,sum(is.na(subset1$NET99n)))
+
+
+#alter/extend predictor matrix, in one-off fashion, to include net99n and net99c
+pred_full_extend<-rbind(pred_full , pred_full["NET99",], pred_full["NET99",])
+pred_full_extend<-cbind(pred_full_extend, pred_full_extend[,"NET99"], pred_full_extend[,"NET99"])
+#new number of rows in pred matrix
+prow<-nrow(pred_full_extend)
+rownames(pred_full_extend)[(prow-1):prow]<-
+  colnames(pred_full_extend)[(prow-1):prow]<-
+  c("NET99n","NET99c")
+
+
+
+#Occupation SOC10M in broad order from professional to manual, use continous values rather than factor levels
+#Predict SOC10M as numeric, then convert back to character version as output
+soc10m_map<-unique(cbind(SOC10M=as.numeric(substr(subset1$SOC10M,1,4)),soc10m_char=subset1$SOC10M))
+subset1$SOC10M<-as.numeric(substr(subset1$SOC10M,1,4))
+
+
+#Adjustments to predictor matrix for predicting net income:
+
+#Categorical element of net99 predicts numeric version of net99 (if missing, do not assign numeric value if not missing must assign numeric value)
+pred_full_extend["NET99n","NET99c"]<-1
+#Numeric element of net99 predicts banded income, not categorical (missing/don't know etc)
+pred_full_extend["BANDN","NET99c"]<-0
+#net99 no longer predicts any variable or has predictors (net99c and net99n do) so replace prediction row with 0 (does not have predictors)
+pred_full_extend[,"NET99"]<-pred_full_extend["NET99",]<-0
+
+
+#Reorder for pred_full
+#predictor variables must come before variables they predict
+for (i in 1:3){
+pred_full_extend<-pred_full_extend[ do.call(order,as.data.frame(pred_full_extend[,prow:1])),]
+pred_full_extend<-pred_full_extend[,rownames(pred_full_extend)] }
+subset1<-subset1[,rownames(pred_full_extend)]
+
+#check for mis-ordering
+#if(sum(upper.tri(pred_full_extend)*pred_full_extend)!=0){Error message}
+#vars to be recombined after synthesis
+
+
+
+
+
+
+
+#############################################################
+#Synthesise
+#create synthetic version of data
+
+#synthesis from processed microdata takes place here, timed
+t1<-Sys.time()
+s11<-syn(subset1,predictor.matrix=pred_full_extend,seed=567,maxfaclevels=100)
+t2<-Sys.time()
+t2-t1
+
+save(s11, file = 's11.RData')
+
+#recombine NET99 into one variable
+s11$syn <- s11$syn  %>%  mutate(
+ NET99 =  ifelse((NET99c=="numeric"),as.character(NET99n),as.character(NET99c))
+# remove additional variables (or can be removed later)
+#, NET99c = NULL,
+#   NET99n = NULL
+ )
+
+
+#AGES back to correct levels
+s11$syn$AGES<-as.factor(s11$syn$AGES)
+levels(s11$syn$AGES)<-levels_pool$ages
+    #levels(as.factor(lfs_17$AGES))
+
+
+#variables only missingness preserved: if not missing then assign a non-missingness value. if var != levels in the input file sample from union of the levels
+
+#replace 1 with sample from lfs[,levels] not including -9,-8
+#for (var in input$var[input$var != input$levels])
+#  subset1[var] <- ifelse(subset1[[var]] %in% c('-8', '-9'), subset1[[var]], 
+#                         sample(levels_pool[[input[var, 'levels']]], nrow(subset1), replace=T)) 
+for (var in input$var[input$var != input$levels])
+  s11$syn[var] <- ifelse(s11$syn[[var]] %in% c('-8', '-9'), as.character( s11$syn[[var]] ), 
+                         sample(levels_pool[[input[var, 'levels']]], nrow(subset1), replace=T))
+
+
+
+#SOC10M back to character strings:
+s11$syn<-merge(s11$syn,soc10m_map, by=c("SOC10M"))
+
+#s11$syn[s11$syn$SOC10M!=-9,][225:507,c(1,ncol(s11$syn))]
+s11$syn <- s11$syn  %>%  mutate(
+  SOC10M =  soc10m_char,
+  soc10m_char=NULL)
+
+
+write.csv(s11$syn,"lfs_22.csv")
+
+#nrow(s11$syn)
+#ncol(s11$syn)
+#End
+
+
+
+
+
+
+
+
+
+
+
+#derived_input
+#input$var
+#for (i in 1:nrow(input))
+#  if(input$type[i]=="factor"){
+#    s11$syn[,i]<-as.factor(s11$syn[,i])
+#    levels(s11$syn[,i])<-levels(subset1[,i])
+#  }
+
+
+
+
+##################################################################
+
+
+#comparissons between original and synthetic data
+
+s11$syn[1:20,]
+subset1[1:20,]
+lfs_17[1:20,input$var]
+
+
